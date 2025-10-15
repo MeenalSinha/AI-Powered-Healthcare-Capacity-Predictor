@@ -10,6 +10,12 @@ import io
 import base64
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -185,12 +191,15 @@ def compute_metrics_and_merge(data):
                 
                 metrics['daily_occupancy'] = occupancy_summary
                 
-                # Calculate occupancy rate based on available beds
-                # Using state-level bed data as reference
-                if 'hospitals_rural_urban' in data:
-                    total_beds_available = data['hospitals_rural_urban']['Total_Beds_RU'].sum()
-                    occupancy_summary['Occupancy_Rate'] = (occupancy_summary['Occupied_Beds'] / total_beds_available * 100).clip(0, 100)
-                    metrics['daily_occupancy'] = occupancy_summary
+                # Calculate occupancy rate for REFERENCE HOSPITAL
+                # Estimate bed capacity based on peak occupancy (realistic for the single hospital)
+                peak_occupancy = occupancy_summary['Occupied_Beds'].max()
+                # Assume hospital operates at ~85% capacity at peak (industry standard)
+                estimated_hospital_beds = int(peak_occupancy / 0.85)
+                
+                occupancy_summary['Occupancy_Rate'] = (occupancy_summary['Occupied_Beds'] / estimated_hospital_beds * 100).clip(0, 100)
+                metrics['daily_occupancy'] = occupancy_summary
+                metrics['estimated_hospital_capacity'] = estimated_hospital_beds
             
             # Disease distribution
             disease_counts = {
@@ -215,24 +224,28 @@ def compute_metrics_and_merge(data):
             
             metrics['total_admissions'] = len(admissions_df)
             
-            # Bed shortage analysis
+            # Bed metrics for REFERENCE HOSPITAL
+            if 'daily_occupancy' in metrics:
+                avg_occupied = occupancy_summary['Occupied_Beds'].mean()
+                hospital_beds = metrics.get('estimated_hospital_capacity', 100)
+                
+                metrics['total_beds'] = hospital_beds
+                metrics['avg_occupied_beds'] = avg_occupied
+                metrics['bed_shortage'] = max(0, avg_occupied - hospital_beds * 0.85)
+                metrics['avg_bed_occupancy'] = (avg_occupied / hospital_beds * 100) if hospital_beds > 0 else 0
+                
+                # Critical days (>85% occupancy)
+                metrics['critical_threshold'] = 85
+                critical_days = len(occupancy_summary[occupancy_summary['Occupancy_Rate'] > 85])
+                total_days = len(occupancy_summary)
+                metrics['critical_hospitals'] = int(critical_days / total_days * 100) if total_days > 0 else 0
+                metrics['resource_shortage_index'] = (critical_days / total_days * 100) if total_days > 0 else 0
+            
+            # National context (for information only)
             if 'hospitals_rural_urban' in data:
                 rural_urban_df = data['hospitals_rural_urban']
-                total_beds = rural_urban_df['Total_Beds_RU'].sum()
-                avg_occupied = occupancy_summary['Occupied_Beds'].mean() if 'daily_occupancy' in metrics else 0
-                
-                metrics['total_beds'] = total_beds
-                metrics['avg_occupied_beds'] = avg_occupied
-                metrics['bed_shortage'] = max(0, avg_occupied - total_beds * 0.85)  # Shortage if >85% capacity
-                metrics['avg_bed_occupancy'] = (avg_occupied / total_beds * 100) if total_beds > 0 else 0
-                
-                # Critical hospitals (>85% occupancy)
-                metrics['critical_threshold'] = 85
-                if 'daily_occupancy' in metrics:
-                    critical_days = len(occupancy_summary[occupancy_summary['Occupancy_Rate'] > 85])
-                    total_days = len(occupancy_summary)
-                    metrics['critical_hospitals'] = int(critical_days / total_days * 100) if total_days > 0 else 0
-                    metrics['resource_shortage_index'] = (critical_days / total_days * 100) if total_days > 0 else 0
+                metrics['national_total_beds'] = rural_urban_df['Total_Beds_RU'].sum()
+                metrics['national_total_hospitals'] = rural_urban_df[['Rural_Hospitals', 'Urban_Hospitals']].sum().sum()
         
         return metrics
     
@@ -351,9 +364,137 @@ def export_to_csv(data, filename):
         st.error(f"Error exporting CSV: {str(e)}")
         return ""
 
+def export_to_pdf(insights, metrics, recommendations):
+    """Export healthcare insights to PDF report"""
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        story = []
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1f77b4'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#2c3e50'),
+            spaceAfter=12,
+            spaceBefore=12
+        )
+        
+        # Title
+        title = Paragraph("🏥 Healthcare Capacity Analysis Report", title_style)
+        story.append(title)
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Report date
+        date_text = f"<b>Report Generated:</b> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}"
+        story.append(Paragraph(date_text, styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Executive Summary
+        story.append(Paragraph("Executive Summary", heading_style))
+        summary_data = [
+            ['Metric', 'Value'],
+            ['Average Bed Occupancy', f"{metrics.get('avg_bed_occupancy', 0):.1f}%"],
+            ['Average ICU Utilization', f"{metrics.get('avg_icu_utilization', 0):.1f}%"],
+            ['Total Hospital Beds', f"{metrics.get('total_beds', 0):,.0f}"],
+            ['Total Admissions', f"{metrics.get('total_admissions', 0):,}"],
+            ['Mortality Rate', f"{metrics.get('mortality_rate', 0):.2f}%"],
+            ['Resource Shortage Index', f"{metrics.get('resource_shortage_index', 0):.1f}%"]
+        ]
+        
+        summary_table = Table(summary_data, colWidths=[3.5*inch, 2.5*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Key Insights
+        story.append(Paragraph("Key Insights", heading_style))
+        for i, insight in enumerate(insights[:3], 1):
+            priority_symbol = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(insight.get('priority', 'Low'), '⚪')
+            insight_text = f"<b>{i}. {insight.get('title', 'N/A')}</b> {priority_symbol}<br/>"
+            insight_text += f"{insight.get('description', 'N/A')}<br/><br/>"
+            story.append(Paragraph(insight_text, styles['Normal']))
+        
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Recommendations
+        story.append(Paragraph("Action Recommendations", heading_style))
+        
+        if recommendations:
+            rec_data = [['Action', 'Stakeholder', 'Timeline', 'Impact']]
+            for rec in recommendations:
+                rec_data.append([
+                    rec.get('Action', ''),
+                    rec.get('Stakeholder', ''),
+                    rec.get('Timeline', ''),
+                    rec.get('Impact', '')
+                ])
+            
+            rec_table = Table(rec_data, colWidths=[2.2*inch, 1.5*inch, 1.3*inch, 1*inch])
+            rec_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e74c3c')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lavender),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(rec_table)
+        
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Footer
+        footer_text = "<i>This report is generated by the AI-Powered Healthcare Capacity Predictor system.<br/>For more information, please contact your healthcare analytics team.</i>"
+        story.append(Paragraph(footer_text, styles['Normal']))
+        
+        # Build PDF
+        doc.build(story)
+        
+        # Get PDF data
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        # Create download link
+        b64 = base64.b64encode(pdf_data).decode()
+        href = f'<a href="data:application/pdf;base64,{b64}" download="healthcare_insights_report.pdf">Download PDF Report</a>'
+        return href
+    
+    except Exception as e:
+        st.error(f"Error generating PDF: {str(e)}")
+        return ""
+
 def main():
     st.title("🏥 AI-Powered Healthcare Capacity Predictor")
     st.markdown("### Real-time Healthcare Analytics & Capacity Forecasting")
+    
+    # Data scope information
+    st.info("📊 **Data Scope**: This dashboard analyzes patient-level data from a reference healthcare facility (15,759 admissions, 2017-2019) merged with environmental pollution data. Hospital capacity metrics and forecasts are based on actual admission patterns from this facility. National hospital infrastructure statistics are provided for context.")
     st.markdown("---")
     
     # Load data
@@ -380,38 +521,47 @@ def main():
     with tab1:
         st.header("National Healthcare Overview")
         
-        # Filters
+        # Filters (Year and Disease filtering active, State for exploration only)
         col1, col2, col3 = st.columns(3)
         
         with col1:
             if 'hospitals_list' in data:
                 states_list = sorted(data['hospitals_list']['State'].unique().tolist())
-                selected_state = st.selectbox("Select State", ['All'] + states_list)
+                selected_state = st.selectbox("Select State (Exploration)", ['All'] + states_list, 
+                                             help="State filter shows available states but metrics below are from reference hospital")
             else:
-                selected_state = st.selectbox("Select State", ['All'])
+                selected_state = st.selectbox("Select State (Exploration)", ['All'])
         
         with col2:
             if 'admissions' in data:
                 years_list = sorted(data['admissions']['Year'].dropna().unique().tolist())
-                selected_year = st.selectbox("Select Year", ['All'] + [str(int(y)) for y in years_list])
+                selected_year = st.selectbox("Filter by Year", ['All'] + [str(int(y)) for y in years_list])
             else:
-                selected_year = st.selectbox("Select Year", ['All'])
+                selected_year = st.selectbox("Filter by Year", ['All'])
         
         with col3:
             disease_types = ['All', 'Heart Disease', 'Diabetes', 'Hypertension', 'Respiratory']
-            selected_disease = st.selectbox("Select Disease Type", disease_types)
+            selected_disease = st.selectbox("Filter by Disease", disease_types)
         
-        # Filter data based on selection
+        # Filter reference hospital data by year and disease
         filtered_admissions = data.get('admissions', pd.DataFrame()).copy()
         if not filtered_admissions.empty:
-            if selected_state != 'All' and 'hospitals_list' in data:
-                # Filter by state (would need to join with hospital list - simplified here)
-                pass
             if selected_year != 'All':
                 filtered_admissions = filtered_admissions[filtered_admissions['Year'] == int(selected_year)]
+            if selected_disease != 'All':
+                # Filter by disease type based on medical conditions
+                disease_map = {
+                    'Heart Disease': 'Has_Heart_Disease',
+                    'Diabetes': 'Has_Diabetes',
+                    'Hypertension': 'Has_Hypertension'
+                }
+                if selected_disease in disease_map:
+                    disease_col = disease_map[selected_disease]
+                    if disease_col in filtered_admissions.columns:
+                        filtered_admissions = filtered_admissions[filtered_admissions[disease_col] == 1]
         
-        # KPIs
-        st.subheader("Key Performance Indicators")
+        # KPIs for Reference Hospital
+        st.subheader("Reference Hospital Performance Indicators")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -433,24 +583,38 @@ def main():
             shortage_index = metrics.get('resource_shortage_index', 0)
             st.metric("Resource Shortage Index", f"{shortage_index:.1f}%")
         
-        # Additional metrics row
+        # Reference Hospital metrics row
         col1, col2, col3 = st.columns(3)
         with col1:
             total_beds = metrics.get('total_beds', 0)
-            st.metric("Total Hospital Beds", f"{total_beds:,.0f}")
+            st.metric("Estimated Hospital Capacity", f"{total_beds:,.0f} beds")
         with col2:
             mortality = metrics.get('mortality_rate', 0)
             st.metric("Mortality Rate", f"{mortality:.2f}%")
         with col3:
             total_admits = metrics.get('total_admissions', 0)
-            st.metric("Total Admissions", f"{total_admits:,}")
+            st.metric("Total Admissions Analyzed", f"{total_admits:,}")
         
-        # Map visualization with actual hospital locations
-        st.subheader("Risk Assessment Map")
+        # National Context (informational)
+        with st.expander("🌐 National Healthcare Infrastructure Context"):
+            col1, col2 = st.columns(2)
+            with col1:
+                nat_beds = metrics.get('national_total_beds', 0)
+                st.metric("National Hospital Beds", f"{nat_beds:,.0f}")
+            with col2:
+                nat_hospitals = metrics.get('national_total_hospitals', 0)
+                st.metric("National Hospitals", f"{nat_hospitals:,.0f}")
+            
+            st.caption("Note: National statistics shown for context only. Metrics above are calculated from reference hospital data.")
+        
+        # Hospital distribution map (informational - shows hospital locations only)
+        st.subheader("National Hospital Distribution Map")
+        st.caption("📍 This map shows the distribution of hospitals across India. Risk metrics shown above are from the reference hospital only.")
+        
         if 'hospitals_list' in data and not data['hospitals_list'].empty:
             hospitals_df = data['hospitals_list'].copy()
             
-            # Sample major cities with coordinates
+            # Sample major cities with coordinates - show hospital counts only
             city_coords = {
                 'Mumbai': [19.0760, 72.8777], 'Delhi': [28.7041, 77.1025],
                 'Bangalore': [12.9716, 77.5946], 'Chennai': [13.0827, 80.2707],
@@ -462,48 +626,36 @@ def main():
             
             map_data = []
             for city, coords in city_coords.items():
-                # Calculate risk based on actual data
+                # Count hospitals in each city from actual data
                 city_hospitals = hospitals_df[hospitals_df['City'].str.contains(city, case=False, na=False)]
                 hospital_count = len(city_hospitals)
                 
-                # Risk calculation based on occupancy
-                if 'daily_occupancy' in metrics:
-                    avg_occ = metrics['daily_occupancy']['Occupancy_Rate'].mean()
-                else:
-                    avg_occ = 70
-                
-                if avg_occ > 85:
-                    risk_level = 'High'
-                elif avg_occ > 70:
-                    risk_level = 'Medium'
-                else:
-                    risk_level = 'Low'
-                
-                map_data.append({
-                    'City': city,
-                    'Latitude': coords[0],
-                    'Longitude': coords[1],
-                    'Risk_Level': risk_level,
-                    'Occupancy': avg_occ,
-                    'Hospitals': hospital_count
-                })
+                if hospital_count > 0:
+                    map_data.append({
+                        'City': city,
+                        'Latitude': coords[0],
+                        'Longitude': coords[1],
+                        'Hospital_Count': hospital_count,
+                        'Category': 'High' if hospital_count > 100 else 'Medium' if hospital_count > 20 else 'Low'
+                    })
             
-            map_df = pd.DataFrame(map_data)
-            
-            fig = px.scatter_mapbox(
-                map_df,
-                lat='Latitude',
-                lon='Longitude',
-                color='Risk_Level',
-                color_discrete_map={'Low': 'green', 'Medium': 'orange', 'High': 'red'},
-                size='Occupancy',
-                hover_data=['City', 'Occupancy', 'Hospitals'],
-                zoom=4,
-                height=500,
-                title="City-wise Healthcare Risk Assessment"
-            )
-            fig.update_layout(mapbox_style="open-street-map")
-            st.plotly_chart(fig, use_container_width=True)
+            if map_data:
+                map_df = pd.DataFrame(map_data)
+                
+                fig = px.scatter_mapbox(
+                    map_df,
+                    lat='Latitude',
+                    lon='Longitude',
+                    color='Category',
+                    color_discrete_map={'High': 'blue', 'Medium': 'purple', 'Low': 'gray'},
+                    size='Hospital_Count',
+                    hover_data=['City', 'Hospital_Count'],
+                    zoom=4,
+                    height=500,
+                    title="Hospital Concentration by City"
+                )
+                fig.update_layout(mapbox_style="open-street-map")
+                st.plotly_chart(fig, use_container_width=True)
         
         # Time series and pie charts
         col1, col2 = st.columns(2)
@@ -661,6 +813,7 @@ def main():
     # Tab 3: Hospital Drill-Down
     with tab3:
         st.header("Hospital Drill-Down Analysis")
+        st.info("ℹ️ Patient-level metrics shown below are based on actual admission data. Hospital selector demonstrates the capability to drill down into facility-specific analytics.")
         
         # Hospital selector with actual data
         if 'hospitals_list' in data and not data['hospitals_list'].empty:
@@ -933,9 +1086,10 @@ def main():
         # Export functionality
         st.subheader("📥 Export Reports")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
+            st.markdown("**📊 Insights Report (CSV)**")
             # CSV Export
             export_data = pd.DataFrame(insights)
             if not export_data.empty:
@@ -943,6 +1097,7 @@ def main():
                 st.markdown(csv_link, unsafe_allow_html=True)
         
         with col2:
+            st.markdown("**📈 Key Metrics (CSV)**")
             # Summary metrics for export
             summary_metrics = pd.DataFrame([{
                 'Metric': 'Avg Bed Occupancy %',
@@ -961,7 +1116,14 @@ def main():
             csv_link2 = export_to_csv(summary_metrics, "key_metrics.csv")
             st.markdown(csv_link2, unsafe_allow_html=True)
         
-        st.info("💡 **Note**: PDF export functionality can be added using libraries like ReportLab or FPDF for production deployment.")
+        with col3:
+            st.markdown("**📄 Complete Report (PDF)**")
+            # PDF Export
+            pdf_link = export_to_pdf(insights, metrics, recommendations)
+            if pdf_link:
+                st.markdown(pdf_link, unsafe_allow_html=True)
+        
+        st.success("✅ All export formats available: CSV for data analysis, PDF for executive reporting")
 
 if __name__ == "__main__":
     main()

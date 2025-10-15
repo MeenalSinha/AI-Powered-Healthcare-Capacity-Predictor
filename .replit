@@ -2,7 +2,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["glibcLocales"]
+packages = ["freetype", "glibcLocales"]
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -39,3 +39,7 @@ externalPort = 80
 [[ports]]
 localPort = 40019
 externalPort = 3000
+
+[[ports]]
+localPort = 44375
+externalPort = 3001
