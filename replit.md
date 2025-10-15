@@ -5,10 +5,12 @@ An interactive Streamlit dashboard for healthcare capacity prediction and analys
 
 ## Recent Changes (October 15, 2025)
 - **Data Integration**: Integrated 6 CSV datasets (hospitals, admissions, mortality, pollution)
-- **Real Metrics Calculation**: Implemented actual bed occupancy, ICU utilization from patient data
+- **Accurate Metrics Calculation**: Fixed bed occupancy to use peak-based capacity estimation (eliminates division by national totals)
+- **Transparent Scope Communication**: Dashboard clearly labeled as analyzing reference hospital with national context separated
 - **Complete Dashboard**: Built 4-tab interface with forecasting, drill-down, and insights
 - **Export Functionality**: Added CSV and PDF report generation with ReportLab
 - **Prophet Forecasting**: Integrated time-series forecasting for 6-week bed demand prediction
+- **Data Integrity Fixes**: Replaced misleading national risk map with hospital distribution visualization
 
 ## Project Architecture
 
@@ -38,11 +40,11 @@ This hybrid approach provides real patient insights while demonstrating national
 ### Key Features
 
 #### Tab 1: National Overview
-- State/year/disease filters
-- Real-time KPIs: bed occupancy %, ICU utilization, critical hospitals
-- Interactive risk assessment map with city markers
-- Time-series occupancy trends
-- Disease distribution analysis
+- Year/disease filters (state filter for exploration only)
+- Reference hospital KPIs: bed occupancy %, ICU utilization, critical load days %
+- Hospital distribution map showing national infrastructure
+- Time-series occupancy trends from reference hospital
+- Disease distribution analysis from patient records
 
 #### Tab 2: Forecast & AI Insights
 - 6-week bed demand forecasting (Prophet or statistical fallback)
@@ -72,11 +74,12 @@ This hybrid approach provides real patient insights while demonstrating national
 - **Caching**: @st.cache_data for performance optimization
 
 ### Computed Metrics
-- **Bed Occupancy Rate**: Daily occupied beds / total available beds × 100
+- **Bed Occupancy Rate**: Daily occupied beds / estimated hospital capacity × 100
+  - Hospital capacity estimated from peak occupancy / 0.85 (assumes peak = 85% capacity)
 - **ICU Utilization**: ICU days / total hospital days × 100
 - **Resource Shortage Index**: % of days exceeding 85% capacity
 - **Mortality Rate**: Deaths / total admissions × 100
-- **Critical Threshold**: 85% occupancy triggers alerts
+- **Critical Load Days**: % of days above 85% occupancy threshold
 
 ### Performance Optimizations
 - Cached data loading with @st.cache_data
