@@ -1,0 +1,77 @@
+You are an AI data analyst.
+
+🎯 Goal:
+Create a lightweight Streamlit dashboard app called 
+“AI-Powered Healthcare Capacity Predictor”
+for the theme “HealthTech & AI in Healthcare”
+with 6 uploaded CSV files (hospital, ICU, disease, oxygen, weather, pollution).
+
+🚀 Your job:
+1. Load and merge all 6 CSVs on common fields (date, city, hospital_name/state).
+2. Clean & preprocess data:
+   - Standardize dates (YYYY-MM-DD)
+   - Handle missing values (drop/fill)
+   - Compute key columns:
+       bed_shortage = total_beds - available_beds
+       occupancy_rate = (total_beds - available_beds)/total_beds*100
+       icu_utilization = (icu_beds - available_icu_beds)/icu_beds*100
+3. Build a **Streamlit dashboard with 4 tabs** only:
+   - Tab 1: Overview
+   - Tab 2: Forecasts
+   - Tab 3: Hospital Drill-Down
+   - Tab 4: Insights Summary
+
+────────────────────────────
+📊 TAB DETAILS
+────────────────────────────
+Tab 1 – “National Overview”
+- Filters: State, Year, Disease Type
+- KPIs: Avg Bed Occupancy %, Avg ICU Utilization %, Critical Hospitals (>85%), Resource Shortage Index
+- Map (Plotly): City color-coded by risk
+- Line chart: Occupancy rate over time
+- Pie chart: Admissions by disease type
+
+Tab 2 – “Forecast & AI Insights”
+- Forecast 6 weeks of bed demand (Prophet or rolling mean)
+- Key Influencers: Correlation heatmap for pollution/temp vs occupancy
+- Slider: Adjust infection rate (What-If)
+- Bar chart: Oxygen availability vs demand
+
+Tab 3 – “Hospital Drill-Down”
+- Select Hospital
+- KPI cards: Bed Utilization %, ICU Usage, Mortality %, Avg Wait Time
+- Bar: Department Utilization
+- Combo Line+Bar: Admissions vs Discharges
+- Pie: Patient Demographics
+
+Tab 4 – “Insights Summary”
+- Text summary of top 3 insights
+- Table: Action recommendations
+- Button: Export summary to CSV/PDF
+
+────────────────────────────
+⚙️ TECH SPECS
+────────────────────────────
+Use Python libraries:
+pandas, numpy, plotly.express, prophet (if available), streamlit.
+
+Performance tips:
+- Load only required columns.
+- Sample data if too large.
+- Avoid training heavy ML models (keep forecasts simple).
+- Cache cleaned data with @st.cache_data to reduce runtime.
+
+────────────────────────────
+💡 BONUS
+────────────────────────────
+If occupancy_rate > 85%, show a red warning badge:
+“⚠️ Critical overload expected — reallocate resources.”
+
+────────────────────────────
+OUTPUT
+────────────────────────────
+Deliver one file: app.py (Streamlit code)
+Dashboard runs locally with `streamlit run app.py`
+Tabs show visuals & insights using uploaded CSVs.
+Keep code modular, clean, and lightweight.
+
